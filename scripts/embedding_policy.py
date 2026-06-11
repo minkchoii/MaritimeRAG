@@ -1,0 +1,160 @@
+from __future__ import annotations
+
+import re
+
+# 중국 기관·모델 계열 차단 (절대 사용 금지)
+CHINESE_MODEL_BLOCKLIST_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"baai",
+        r"\bbge[-_]",
+        r"qwen",
+        r"tongyi",
+        r"dashscope",
+        r"alibaba",
+        r"damo",
+        r"zhipu",
+        r"chatglm",
+        r"\bglm[-_]",
+        r"baichuan",
+        r"internlm",
+        r"internvl",
+        r"text2vec",
+        r"\bm3e[-_]",
+        r"piccolo",
+        r"yuque",
+        r"modelscope",
+        r"wenxin",
+        r"ernie",
+        r"paddle",
+        r"telechat",
+        r"minimax",
+        r"moonshot",
+        r"deepseek",
+    )
+)
+
+# 영어 위주 단일어 모델 차단 (한·영 규정 문서에 부적합)
+ENGLISH_ONLY_MODEL_PATTERNS: tuple[re.Pattern[str], ...] = tuple(
+    re.compile(pattern, re.IGNORECASE)
+    for pattern in (
+        r"all-minilm-l6",
+        r"all-mpnet-base",
+        r"e5-small(?!.*multilingual)",
+        r"nomic-embed",
+    )
+)
+
+LOCAL_PROVIDER = "sentence-transformers"
+REQUIRED_LANGUAGES = ("ko", "en")
+
+# 로컬 HuggingFace 모델만 허용 (한국어·영어 다국어 지원)
+ALLOWED_EMBEDDING_PRESETS: dict[str, dict[str, str | list[str]]] = {
+    "e5-base": {
+        "provider": LOCAL_PROVIDER,
+        "model": "intfloat/multilingual-e5-base",
+        "deployment": "local",
+        "languages": ["ko", "en"],
+        "note": "Microsoft E5 multilingual — 로컬 실행, 한·영 권장 기본",
+    },
+    "e5-large": {
+        "provider": LOCAL_PROVIDER,
+        "model": "intfloat/multilingual-e5-large",
+        "deployment": "local",
+        "languages": ["ko", "en"],
+        "note": "Microsoft E5 multilingual large — 로컬, 품질↑·속도↓",
+    },
+    "snowflake-arctic": {
+        "provider": LOCAL_PROVIDER,
+        "model": "Snowflake/snowflake-arctic-embed-l-v2.0",
+        "deployment": "local",
+        "languages": ["ko", "en"],
+        "note": "Snowflake Arctic Embed — 로컬, 다국어",
+    },
+    "paraphrase-multilingual": {
+        "provider": LOCAL_PROVIDER,
+        "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+        "deployment": "local",
+        "languages": ["ko", "en"],
+        "note": "로컬 다국어 MiniLM — 가볍지만 e5보다 성능 낮음",
+    },
+}
+
+DEFAULT_EMBEDDING_PRESET = "e5-base"
+
+
+def is_chinese_model_blocked(model_name: str) -> bool:
+    return any(pattern.search(model_name) for pattern in CHINESE_MODEL_BLOCKLIST_PATTERNS)
+
+
+def is_english_only_model_blocked(model_name: str) -> bool:
+    return any(pattern.search(model_name) for pattern in ENGLISH_ONLY_MODEL_PATTERNS)
+
+
+def validate_embedding_model(model_name: str) -> None:
+    if is_chinese_model_blocked(model_name):
+        raise ValueError(
+            f"Chinese-origin embedding model is not allowed: {model_name}\n"
+            f"Allowed local presets: {', '.join(sorted(ALLOWED_EMBEDDING_PRESETS))}"
+        )
+    if is_english_only_model_blocked(model_name):
+        raise ValueError(
+            f"English-only embedding model is not allowed for KR/EN regulations: {model_name}\n"
+            f"Use a multilingual local preset (e.g. e5-base, e5-large)."
+        )
+
+
+def assert_local_provider(provider: str) -> None:
+    if provider != LOCAL_PROVIDER:
+        raise ValueError(
+            f"Only local embeddings are allowed (provider={LOCAL_PROVIDER}). "
+            f"Cloud/API embedding providers are disabled."
+        )
+
+
+def resolve_embedding_config(preset: str, model_override: str | None = None) -> dict[str, str | list[str]]:
+    if preset not in ALLOWED_EMBEDDING_PRESETS:
+        allowed = ", ".join(sorted(ALLOWED_EMBEDDING_PRESETS))
+        raise ValueError(f"Unknown preset '{preset}'. Allowed presets: {allowed}")
+
+    config: dict[str, str | list[str]] = dict(ALLOWED_EMBEDDING_PRESETS[preset])
+    if model_override:
+        validate_embedding_model(model_override)
+        config["model"] = model_override
+    else:
+        validate_embedding_model(str(config["model"]))
+
+    assert_local_provider(str(config["provider"]))
+    config["preset"] = preset
+    return config
+
+
+def e5_query_prefix(model_name: str) -> str:
+    lower = model_name.lower()
+    if "e5" in lower and "multilingual" in lower:
+        return "query: "
+    return ""
+
+
+def e5_passage_prefix(model_name: str) -> str:
+    lower = model_name.lower()
+    if "e5" in lower and "multilingual" in lower:
+        return "passage: "
+    return ""
+
+
+def embed_texts_local(texts: list[str], model_name: str, *, for_query: bool = False) -> list[list[float]]:
+    """Run sentence-transformers locally (no API calls)."""
+    from sentence_transformers import SentenceTransformer
+
+    prefix_fn = e5_query_prefix if for_query else e5_passage_prefix
+    prefix = prefix_fn(model_name)
+    prefixed = [f"{prefix}{text}" if prefix else text for text in texts]
+
+    encoder = SentenceTransformer(model_name)
+    vectors = encoder.encode(
+        prefixed,
+        normalize_embeddings=True,
+        show_progress_bar=len(texts) > 8,
+    )
+    return vectors.tolist()

@@ -1,0 +1,248 @@
+"""
+Run the MaritimeRAG preprocessing + indexing pipeline for one or more manifest documents.
+
+Typical full run (KR 1편 전편):
+  python scripts/00_build_manifest.py
+  python scripts/run_rag_batch.py --doc-id kr_1_2025 --run-eval
+
+Steps: pdf, layout, merge, crop, chunks, quality, index, eval
+"""
+from __future__ import annotations
+
+import argparse
+import subprocess
+import sys
+from pathlib import Path
+
+import pandas as pd
+
+ALL_STEPS = ("pdf", "layout", "merge", "crop", "chunks", "quality", "index", "eval")
+
+
+def run_step(cmd: list[str], cwd: Path) -> None:
+    print(f"\n[RUN] {' '.join(cmd)}", flush=True)
+    subprocess.run(cmd, cwd=str(cwd), check=True)
+
+
+def load_manifest_rows(
+    manifest_path: Path,
+    doc_ids: list[str] | None,
+    source: str | None,
+) -> list[dict]:
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"Manifest not found: {manifest_path}")
+
+    df = pd.read_csv(manifest_path)
+    if doc_ids:
+        df = df[df["doc_id"].isin(doc_ids)]
+    if source:
+        df = df[df["source"].str.upper() == source.upper()]
+
+    if df.empty:
+        raise ValueError("No manifest rows matched the filter.")
+
+    dup = df[df["doc_id"].duplicated()]
+    if not dup.empty:
+        raise ValueError(
+            f"Manifest contains duplicate doc_id values: {dup['doc_id'].tolist()}"
+        )
+
+    return df.to_dict(orient="records")
+
+
+def count_page_images(pages_dir: Path) -> int:
+    if not pages_dir.exists():
+        return 0
+    return len(list(pages_dir.glob("page_*.png")))
+
+
+def process_document(
+    row: dict,
+    *,
+    project_root: Path,
+    python: str,
+    steps: tuple[str, ...],
+    dpi: int,
+    overwrite_images: bool,
+    layout_conf: float,
+    layout_model: Path,
+    run_eval: bool,
+    eval_questions: Path,
+    top_k: int,
+) -> None:
+    doc_id = str(row["doc_id"])
+    pdf_path = Path(str(row["file_path"]))
+    if not pdf_path.exists():
+        raise FileNotFoundError(f"PDF not found for {doc_id}: {pdf_path}")
+
+    pages_dir = project_root / "data/processed/pages" / doc_id
+    layout_dir = project_root / "data/processed/layout_json" / doc_id
+    merged_dir = project_root / "data/processed/layout_json_merged" / doc_id
+    model_path = layout_model if layout_model.is_absolute() else project_root / layout_model
+
+    print(f"\n{'=' * 60}\nDocument: {doc_id}\nPDF: {pdf_path}\n{'=' * 60}")
+
+    if "pdf" in steps:
+        cmd = [
+            python,
+            "scripts/01_pdf_to_images.py",
+            "--pdf",
+            str(pdf_path),
+            "--out-dir",
+            "data/processed/pages",
+            "--doc-id",
+            doc_id,
+            "--dpi",
+            str(dpi),
+        ]
+        if overwrite_images:
+            cmd.append("--overwrite")
+        run_step(cmd, project_root)
+
+    page_count = count_page_images(pages_dir)
+    print(f"Page images: {page_count} under {pages_dir}")
+    if page_count == 0 and any(s in steps for s in ("layout", "merge", "crop", "chunks")):
+        raise RuntimeError(f"No page images for {doc_id}. Run pdf step first.")
+
+    if "layout" in steps:
+        if not model_path.exists():
+            raise FileNotFoundError(f"Layout model not found: {model_path}")
+        run_step(
+            [
+                python,
+                "scripts/02_layout_detect.py",
+                "--image-dir",
+                str(pages_dir),
+                "--doc-id",
+                doc_id,
+                "--model",
+                str(model_path),
+                "--out-dir",
+                "data/processed/layout_json",
+                "--conf",
+                str(layout_conf),
+            ],
+            project_root,
+        )
+
+    if "merge" in steps:
+        run_step(
+            [python, "scripts/06_merge_text_blocks.py", "--doc-id", doc_id],
+            project_root,
+        )
+
+    if "crop" in steps:
+        run_step(
+            [
+                python,
+                "scripts/03_crop_elements.py",
+                "--doc-id",
+                doc_id,
+                "--merged",
+            ],
+            project_root,
+        )
+
+    if "chunks" in steps:
+        if not merged_dir.exists():
+            raise FileNotFoundError(f"Merged layout missing: {merged_dir}")
+        run_step(
+            [python, "scripts/07_extract_chunks.py", "--doc-id", doc_id],
+            project_root,
+        )
+
+    if "quality" in steps:
+        run_step(
+            [python, "scripts/08_analyze_chunks_quality.py", "--doc-id", doc_id],
+            project_root,
+        )
+
+    if "index" in steps:
+        run_step(
+            [python, "scripts/09_build_index.py", "--doc-id", doc_id],
+            project_root,
+        )
+
+    if "eval" in steps or run_eval:
+        questions = eval_questions
+        if not questions.is_absolute():
+            questions = project_root / questions
+        if not questions.exists():
+            print(f"[WARN] Eval questions not found, skipping: {questions}")
+        else:
+            run_step(
+                [
+                    python,
+                    "scripts/11_eval_retrieval.py",
+                    "--doc-id",
+                    doc_id,
+                    "--top-k",
+                    str(top_k),
+                    "--questions",
+                    str(questions),
+                ],
+                project_root,
+            )
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser(description="Batch-run RAG pipeline for manifest documents.")
+    parser.add_argument("--python", type=str, default=sys.executable)
+    parser.add_argument("--manifest", type=Path, default=Path("data/manifests/pdf_manifest.csv"))
+    parser.add_argument("--doc-id", action="append", dest="doc_ids", help="Repeatable doc_id filter")
+    parser.add_argument("--source", type=str, default=None, help="Filter by source (KR, DNV, ABS)")
+    parser.add_argument(
+        "--steps",
+        type=str,
+        default="all",
+        help=f"Comma-separated steps or 'all'. Choices: {','.join(ALL_STEPS)}",
+    )
+    parser.add_argument("--dpi", type=int, default=200, help="PDF render DPI (200 recommended for full books)")
+    parser.add_argument("--overwrite-images", action="store_true", help="Re-render all page PNGs")
+    parser.add_argument("--layout-conf", type=float, default=0.25)
+    parser.add_argument(
+        "--layout-model",
+        type=Path,
+        default=Path("models/layout/yolov10m_doclaynet.pt"),
+    )
+    parser.add_argument("--run-eval", action="store_true", help="Run retrieval eval after index")
+    parser.add_argument(
+        "--eval-questions",
+        type=Path,
+        default=Path("data/eval/kr_1_2025_questions.jsonl"),
+    )
+    parser.add_argument("--top-k", type=int, default=5)
+    args = parser.parse_args()
+
+    project_root = Path.cwd()
+    if args.steps.strip().lower() == "all":
+        steps = ALL_STEPS
+    else:
+        steps = tuple(s.strip().lower() for s in args.steps.split(",") if s.strip())
+        unknown = [s for s in steps if s not in ALL_STEPS]
+        if unknown:
+            raise ValueError(f"Unknown steps: {unknown}. Valid: {ALL_STEPS}")
+
+    rows = load_manifest_rows(args.manifest, args.doc_ids, args.source)
+    print(f"Processing {len(rows)} document(s): {[r['doc_id'] for r in rows]}")
+
+    for row in rows:
+        process_document(
+            row,
+            project_root=project_root,
+            python=args.python,
+            steps=steps,
+            dpi=args.dpi,
+            overwrite_images=args.overwrite_images,
+            layout_conf=args.layout_conf,
+            layout_model=args.layout_model,
+            run_eval=args.run_eval,
+            eval_questions=args.eval_questions,
+            top_k=args.top_k,
+        )
+
+    print("\nBatch pipeline completed.")
+
+
+if __name__ == "__main__":
+    main()
