@@ -1,11 +1,9 @@
-# =============================================================================
-# MaritimeRAG — GitHub에 올리지 않는 항목 (로컬 / OneDrive 등 별도 보관)
-# =============================================================================
 
 # --- 원본 규칙 PDF (저작권·용량) ---
 # 로컬: data/raw_pdfs/<선급>/ 아래에 배치
 # 공유: README의 OneDrive 링크 참고
-data/raw_pdfs/**/*.pdf
+# Source documents are licensed/large and must stay outside Git.
+data/raw_pdfs/**
 !data/raw_pdfs/**/.gitkeep
 
 # --- 전처리·인덱스 산출물 (스크립트로 재생성 가능, 용량 큼) ---
@@ -65,3 +63,9 @@ Desktop.ini
 *.log
 tmp/
 temp/
+
+# One-off local diagnostics and generated comparison reports
+scripts/_tmp_*.py
+data/eval/*_before.md
+data/eval/*_after.md
+data/eval/*_compare.md

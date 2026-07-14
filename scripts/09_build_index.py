@@ -11,9 +11,6 @@ if str(_SCRIPT_DIR) not in sys.path:
 
 import re
 
-from clause_parse import article_number_from_text, is_article_clause_number
-
-REFERENCE_CLAUSE_RE = re.compile(r"(\d{3,})\.\s*의\s*규정")
 from embedding_policy import (
     DEFAULT_EMBEDDING_PRESET,
     ALLOWED_EMBEDDING_PRESETS,
@@ -21,165 +18,16 @@ from embedding_policy import (
     embed_texts_local,
     resolve_embedding_config,
 )
-
-
-def text_for_embedding(chunk: dict) -> str:
-    """Enrich chunks for retrieval: article headers, cross-refs (준용), clause tags."""
-    text = str(chunk.get("text", "")).strip()
-    if not text:
-        return text
-
-    article = str(chunk.get("article_number") or chunk.get("clause_number") or "")
-    if not article or not is_article_clause_number(article):
-        inferred = article_number_from_text(text)
-        if inferred:
-            article = inferred
-
-    parts: list[str] = []
-
-    if article and is_article_clause_number(article):
-        parts.append(f"조문 {article}절 {article}.")
-
-    if len(text) < 200 and article and is_article_clause_number(article):
-        first_line = text.split("\n", 1)[0].strip()
-        if not first_line.startswith(f"{article}."):
-            text = f"{article}. {text}"
-
-    ref = REFERENCE_CLAUSE_RE.search(text)
-    if ref:
-        ref_no = ref.group(1)
-        if ref_no != article:
-            parts.append(f"참조 {ref_no}절 {ref_no}.")
-
-    if parts:
-        prefix = " ".join(parts)
-        if not text.startswith(prefix):
-            return f"{prefix} {text}"
-    return text
-
-
-DEFAULT_INDEX_TYPES = frozenset({"text", "table", "picture"})
-MIN_INDEX_TEXT_CHARS = 10
-PICTURE_PLACEHOLDER_MARKERS = ("[picture element", "refer to crop image")
-
-
-def load_chunk_ids_from_suspicious_csv(csv_path: Path) -> set[str]:
-    if not csv_path.exists():
-        return set()
-    import csv
-
-    ids: set[str] = set()
-    with csv_path.open(encoding="utf-8", newline="") as csv_f:
-        reader = csv.DictReader(csv_f)
-        for row in reader:
-            chunk_id = row.get("chunk_id", "").strip()
-            if chunk_id:
-                ids.add(chunk_id)
-    return ids
-
-
-def load_chunks(chunks_path: Path) -> list[dict]:
-    chunks: list[dict] = []
-    with chunks_path.open(encoding="utf-8") as chunks_f:
-        for line in chunks_f:
-            line = line.strip()
-            if line:
-                chunks.append(json.loads(line))
-    return chunks
-
-
-def is_placeholder_picture(text: str) -> bool:
-    lower = text.lower()
-    return any(m in lower for m in PICTURE_PLACEHOLDER_MARKERS)
-
-
-def should_index_chunk(
-    chunk: dict,
-    include_types: frozenset[str],
-    skip_ids: set[str],
-    min_chars: int,
-) -> bool:
-    chunk_id = str(chunk.get("chunk_id", ""))
-    if chunk_id in skip_ids:
-        text = str(chunk.get("text", "")).strip()
-        article = str(chunk.get("article_number") or chunk.get("clause_number") or "")
-        if not (is_article_clause_number(article) and len(text) >= 80):
-            return False
-
-    element_type = str(chunk.get("element_type", "")).lower()
-    if element_type not in include_types:
-        return False
-
-    text = str(chunk.get("text", "")).strip()
-    text_len = len(text)
-
-    if element_type == "picture":
-        if chunk.get("linked_caption_id") and text_len >= min_chars:
-            return True
-        if not is_placeholder_picture(text) and text_len >= min_chars:
-            return True
-        return False
-
-    return text_len >= min_chars
-
-
-def filter_chunks_for_index(
-    chunks: list[dict],
-    include_types: frozenset[str],
-    skip_ids: set[str],
-    min_chars: int,
-) -> list[dict]:
-    return [
-        chunk
-        for chunk in chunks
-        if should_index_chunk(chunk, include_types, skip_ids, min_chars)
-    ]
-
-
-def build_chroma_index(
-    chunks: list[dict],
-    out_dir: Path,
-    collection_name: str,
-    embeddings: list[list[float]],
-) -> None:
-    import chromadb
-    from chromadb.config import Settings
-
-    out_dir.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(path=str(out_dir), settings=Settings(anonymized_telemetry=False))
-
-    try:
-        client.delete_collection(collection_name)
-    except Exception:
-        pass
-
-    collection = client.create_collection(name=collection_name, metadata={"hnsw:space": "cosine"})
-
-    ids = [str(c["chunk_id"]) for c in chunks]
-    documents = [str(c.get("text", "")) for c in chunks]
-    metadatas = []
-    for chunk in chunks:
-        meta = {
-            "doc_id": str(chunk.get("doc_id", "")),
-            "page_number": int(chunk.get("page_number", 0)),
-            "element_type": str(chunk.get("element_type", "")),
-            "element_id": str(chunk.get("element_id", "")),
-            "clause_number": str(chunk.get("clause_number", "")),
-            "article_number": str(chunk.get("article_number", "")),
-            "crop_path": str(chunk.get("crop_path", "")),
-            "source_page_image": str(chunk.get("source_page_image", "")),
-        }
-        metadatas.append(meta)
-
-    batch_size = 64
-    for start in range(0, len(chunks), batch_size):
-        end = start + batch_size
-        collection.add(
-            ids=ids[start:end],
-            documents=documents[start:end],
-            embeddings=embeddings[start:end],
-            metadatas=metadatas[start:end],
-        )
+from index_build_lib import (
+    MIN_INDEX_TEXT_CHARS,
+    build_chroma_index,
+    chunk_metadata,
+    embedding_text_and_mode,
+    filter_chunks_for_index,
+    folder_from_path,
+    load_chunk_ids_from_suspicious_csv,
+    load_chunks,
+)
 
 
 def main() -> None:
@@ -237,12 +85,55 @@ def main() -> None:
         skip_ids = load_chunk_ids_from_suspicious_csv(suspicious_csv)
 
     all_chunks = load_chunks(chunks_path)
+    table_chunks_path = args.chunks_dir / args.doc_id / "table_chunks.jsonl"
+    table_chunks: list[dict] = []
+    has_structured_tables = table_chunks_path.exists()
+    if has_structured_tables:
+        table_chunks = load_chunks(table_chunks_path)
+        all_chunks = [
+            c
+            for c in all_chunks
+            if not (
+                str(c.get("element_type", "")).lower() == "table"
+                and not c.get("chunk_type")
+            )
+        ]
+        all_chunks.extend(table_chunks)
+
     index_chunks = filter_chunks_for_index(all_chunks, include_types, skip_ids, args.min_chars)
 
     if not index_chunks:
         raise ValueError("No chunks selected for indexing. Check filters and chunks.jsonl.")
 
-    texts = [text_for_embedding(c) for c in index_chunks]
+    import pandas as pd
+
+    manifest_csv = Path("data/manifests/pdf_manifest.csv")
+    source, file_name, folder = "UNKNOWN", "", ""
+    if manifest_csv.exists():
+        df = pd.read_csv(manifest_csv)
+        row = df[df["doc_id"] == args.doc_id]
+        if not row.empty:
+            meta_row = row.iloc[0].to_dict()
+            source = str(meta_row.get("source", "UNKNOWN"))
+            file_name = str(meta_row.get("file_name", ""))
+            folder = folder_from_path(str(meta_row.get("file_path", "")))
+
+    texts: list[str] = []
+    metadatas: list[dict] = []
+    for chunk in index_chunks:
+        text, mode = embedding_text_and_mode(
+            chunk, source=source, file_name=file_name, folder=folder
+        )
+        texts.append(text)
+        metadatas.append(
+            chunk_metadata(
+                chunk,
+                source=source,
+                file_name=file_name,
+                folder=folder,
+                embedding_mode=mode,
+            )
+        )
     model_name = str(embed_config["model"])
 
     print(f"Embedding preset: {args.embedding_preset}")
@@ -254,12 +145,16 @@ def main() -> None:
     embeddings = embed_texts_local(texts, model_name, for_query=False)
 
     collection_name = f"{args.doc_id}_chunks"
-    build_chroma_index(index_chunks, chroma_dir, collection_name, embeddings)
+    build_chroma_index(index_chunks, texts, metadatas, embeddings, chroma_dir, collection_name)
 
     type_counts: dict[str, int] = {}
+    chunk_type_counts: dict[str, int] = {}
     for chunk in index_chunks:
         t = str(chunk.get("element_type", ""))
         type_counts[t] = type_counts.get(t, 0) + 1
+        ct = str(chunk.get("chunk_type", "") or "")
+        if ct:
+            chunk_type_counts[ct] = chunk_type_counts.get(ct, 0) + 1
 
     manifest = {
         "doc_id": args.doc_id,
@@ -277,6 +172,8 @@ def main() -> None:
         "skipped_suspicious": len(skip_ids),
         "include_types": sorted(include_types),
         "indexed_by_type": type_counts,
+        "indexed_by_chunk_type": chunk_type_counts,
+        "table_chunks_indexed": len(table_chunks) if has_structured_tables else 0,
     }
     index_doc_dir.mkdir(parents=True, exist_ok=True)
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")

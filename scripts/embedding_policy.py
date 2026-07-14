@@ -143,18 +143,58 @@ def e5_passage_prefix(model_name: str) -> str:
     return ""
 
 
-def embed_texts_local(texts: list[str], model_name: str, *, for_query: bool = False) -> list[list[float]]:
+def embed_texts_local(
+    texts: list[str],
+    model_name: str,
+    *,
+    for_query: bool = False,
+    timing=None,
+) -> list[list[float]]:
     """Run sentence-transformers locally (no API calls)."""
-    from sentence_transformers import SentenceTransformer
-
+    if timing is not None:
+        if hasattr(timing, "set_cache"):
+            timing.set_cache("embedding_model_loaded_from_cache", embedding_model_is_cached(model_name))
+        if hasattr(timing, "mark"):
+            timing.mark("t_query_embedding_start")
     prefix_fn = e5_query_prefix if for_query else e5_passage_prefix
     prefix = prefix_fn(model_name)
     prefixed = [f"{prefix}{text}" if prefix else text for text in texts]
 
-    encoder = SentenceTransformer(model_name)
+    encoder = get_sentence_transformer(model_name)
     vectors = encoder.encode(
         prefixed,
         normalize_embeddings=True,
         show_progress_bar=len(texts) > 8,
     )
+    if timing is not None and hasattr(timing, "mark"):
+        timing.mark("t_query_embedding_end")
     return vectors.tolist()
+
+
+_ENCODER_CACHE: dict[str, object] = {}
+
+
+def embedding_model_is_cached(model_name: str) -> bool:
+    return model_name in _ENCODER_CACHE
+
+
+def clear_encoder_cache() -> None:
+    _ENCODER_CACHE.clear()
+
+
+def get_sentence_transformer(model_name: str):
+    """Load embedding model once per process (reuse across queries)."""
+    if model_name not in _ENCODER_CACHE:
+        import os
+
+        os.environ.setdefault("HF_HUB_DISABLE_PROGRESS_BARS", "1")
+        os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
+        from sentence_transformers import SentenceTransformer
+
+        _ENCODER_CACHE[model_name] = SentenceTransformer(model_name)
+    return _ENCODER_CACHE[model_name]
+
+
+def warm_embed_model(model_name: str) -> None:
+    """Eager-load embedding weights (UI startup / pre-warm)."""
+    get_sentence_transformer(model_name)

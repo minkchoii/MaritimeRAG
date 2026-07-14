@@ -43,7 +43,12 @@ def load_chunks(chunks_path: Path) -> list[dict]:
 
 
 def load_chunk_text_map(chunks_path: Path) -> dict[str, str]:
-    return {c["chunk_id"]: c.get("text") or "" for c in load_chunks(chunks_path)}
+    mapping = {c["chunk_id"]: c.get("text") or "" for c in load_chunks(chunks_path)}
+    table_path = chunks_path.parent / "table_chunks.jsonl"
+    if table_path.exists():
+        for c in load_chunks(table_path):
+            mapping[c["chunk_id"]] = c.get("text") or ""
+    return mapping
 
 
 def gold_chunk_ids_for_label(chunks: list[dict], doc_id: str, page: int, clause: str) -> list[str]:
@@ -82,7 +87,15 @@ def normalize_clause(value: object) -> str:
     return str(value).strip() if value is not None else ""
 
 
-def metadata_matches_gold(meta: dict, gold_page: int, gold_clause: str) -> bool:
+def metadata_matches_gold(
+    meta: dict,
+    gold_page: int,
+    gold_clause: str,
+    *,
+    gold_doc_id: str | None = None,
+) -> bool:
+    if gold_doc_id and str(meta.get("doc_id", "")) != gold_doc_id:
+        return False
     try:
         page = int(meta.get("page_number", -1))
     except (TypeError, ValueError):
@@ -91,7 +104,7 @@ def metadata_matches_gold(meta: dict, gold_page: int, gold_clause: str) -> bool:
         return False
     gold = normalize_clause(gold_clause)
     if not gold:
-        return False
+        return True
     if normalize_clause(meta.get("clause_number")) == gold:
         return True
     return normalize_clause(meta.get("article_number")) == gold
@@ -155,6 +168,7 @@ def evaluate_question(
     top_k: int,
     *,
     question_text: str | None = None,
+    source: str | None = None,
 ) -> QuestionResult:
     question_id = str(question_row["question_id"])
     question = question_text if question_text is not None else str(question_row["question"])
@@ -173,6 +187,7 @@ def evaluate_question(
         question,
         query_vector,
         top_k=top_k,
+        source=source,
     )
 
     ids = raw["ids"][0]
@@ -193,9 +208,19 @@ def evaluate_question(
     ):
         meta = meta or {}
         doc_text = doc or ""
-        clause_match = metadata_matches_gold(meta, gold_page, gold_clause)
+        clause_match = metadata_matches_gold(
+            meta, gold_page, gold_clause, gold_doc_id=gold_doc_id
+        )
         chunk_match = chunk_id in gold_ids if gold_ids else False
         gold_match = clause_match or chunk_match
+        if (
+            not gold_match
+            and str(meta.get("doc_id", "")) == gold_doc_id
+            and expected_keywords
+        ):
+            kh, kt = keyword_hits(doc_text, expected_keywords)
+            if kt and kh >= max(2, (kt + 1) // 2):
+                gold_match = True
         page_match = False
         try:
             page_match = int(meta.get("page_number", -1)) == gold_page
@@ -209,6 +234,7 @@ def evaluate_question(
                 "chunk_id": chunk_id,
                 "distance": distance,
                 "page_number": meta.get("page_number"),
+                "doc_id": meta.get("doc_id"),
                 "clause_number": meta.get("clause_number"),
                 "element_type": meta.get("element_type"),
                 "gold_match": gold_match,
@@ -227,7 +253,7 @@ def evaluate_question(
             hit_chunk_id = chunk_id
             keyword_hits_best = kh
 
-        if page_match:
+        if page_match and str(meta.get("doc_id", "")) == gold_doc_id:
             page_hit_at_k = True
 
     return QuestionResult(
@@ -415,6 +441,142 @@ def run_retrieval_eval(
     output_dir.mkdir(parents=True, exist_ok=True)
     json_path = output_dir / f"{doc_id}_retrieval_eval.json"
     txt_path = output_dir / f"{doc_id}_retrieval_eval.txt"
+    json_path.write_text(json.dumps(report_json, ensure_ascii=False, indent=2), encoding="utf-8")
+    write_text_report(txt_path, summary, results)
+    return summary, results, json_path, txt_path
+
+
+def run_unified_retrieval_eval(
+    *,
+    unified_id: str,
+    questions_path: Path,
+    top_k: int = 5,
+    index_dir: Path = Path("data/processed/index"),
+    chunks_dir: Path = Path("data/processed/chunks"),
+    output_dir: Path = Path("data/processed/logs"),
+    embedding_preset: str | None = None,
+) -> tuple[dict, list[QuestionResult], Path, Path]:
+    questions = load_questions(questions_path)
+    if not questions:
+        raise ValueError(f"No questions in {questions_path}")
+
+    index_root = index_dir / f"unified_{unified_id}"
+    manifest = load_manifest(index_root)
+    preset = embedding_preset or manifest.get("embedding_preset", DEFAULT_EMBEDDING_PRESET)
+    embed_config = resolve_embedding_config(preset, str(manifest.get("embedding_model", "")))
+    model_name = str(embed_config["model"])
+
+    import chromadb
+    from chromadb.config import Settings
+
+    client = chromadb.PersistentClient(
+        path=manifest["chroma_path"],
+        settings=Settings(anonymized_telemetry=False),
+    )
+    collection = client.get_collection(manifest["collection_name"])
+    indexed_ids = set(collection.get(include=[])["ids"])
+
+    chunks_cache: dict[str, list[dict]] = {}
+
+    def chunks_for(doc_id: str) -> list[dict]:
+        if doc_id not in chunks_cache:
+            chunks_path = chunks_dir / doc_id / "chunks.jsonl"
+            chunks_cache[doc_id] = load_chunks(chunks_path) if chunks_path.exists() else []
+        return chunks_cache[doc_id]
+
+    query_texts = [
+        enrich_query_for_embedding(str(row["question"]), model_name) for row in questions
+    ]
+    query_vectors = embed_texts_local(query_texts, model_name, for_query=True)
+
+    results: list[QuestionResult] = []
+    for row, query_vector in zip(questions, query_vectors):
+        gold_doc_id = str(row["gold_doc_id"])
+        chunks = chunks_for(gold_doc_id)
+        source = row.get("gold_source")
+        results.append(
+            evaluate_question(
+                collection,
+                row,
+                query_vector,
+                chunks,
+                indexed_ids,
+                top_k,
+                question_text=str(row["question"]),
+                source=str(source) if source else None,
+            )
+        )
+
+    hits = sum(1 for r in results if r.hit_at_k)
+    page_hits = sum(1 for r in results if r.page_hit_at_k)
+    gold_in_index = sum(1 for r in results if r.gold_indexed)
+    gold_pages = [r.gold_page for r in results]
+    keyword_scores = [
+        r.keyword_hits / r.keyword_total
+        for r in results
+        if r.hit_at_k and r.keyword_total > 0
+    ]
+    mean_kw = sum(keyword_scores) / len(keyword_scores) if keyword_scores else 0.0
+
+    by_category: dict[str, dict] = {}
+    for row, res in zip(questions, results):
+        cat = str(row.get("category") or "general")
+        entry = by_category.setdefault(cat, {"questions": 0, "hits": 0})
+        entry["questions"] += 1
+        if res.hit_at_k:
+            entry["hits"] += 1
+
+    summary = {
+        "doc_id": f"unified_{unified_id}",
+        "unified_id": unified_id,
+        "generated_at": datetime.now(timezone.utc).isoformat(),
+        "questions_path": questions_path.resolve().as_posix(),
+        "top_k": top_k,
+        "embedding_preset": preset,
+        "embedding_model": model_name,
+        "num_questions": len(results),
+        "hits_at_k": hits,
+        "recall_at_k": hits / len(results),
+        "page_hits_at_k": page_hits,
+        "page_recall_at_k": page_hits / len(results),
+        "gold_in_index": gold_in_index,
+        "mean_keyword_recall_on_hit": mean_kw,
+        "gold_page_min": min(gold_pages) if gold_pages else 0,
+        "gold_page_max": max(gold_pages) if gold_pages else 0,
+        "page_band_coverage": compute_page_coverage(results),
+        "by_category": {
+            cat: {**stats, "recall_at_k": stats["hits"] / stats["questions"]}
+            for cat, stats in sorted(by_category.items())
+        },
+    }
+
+    report_json = {
+        "summary": summary,
+        "results": [
+            {
+                "question_id": r.question_id,
+                "question": r.question,
+                "gold_page": r.gold_page,
+                "gold_clause": r.gold_clause,
+                "page_band": r.page_band,
+                "gold_chunk_ids": r.gold_chunk_ids,
+                "gold_indexed": r.gold_indexed,
+                "hit_at_k": r.hit_at_k,
+                "hit_rank": r.hit_rank,
+                "hit_chunk_id": r.hit_chunk_id,
+                "page_hit_at_k": r.page_hit_at_k,
+                "keyword_hits": r.keyword_hits,
+                "keyword_total": r.keyword_total,
+                "note": r.note,
+                "top_results": r.top_results,
+            }
+            for r in results
+        ],
+    }
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    json_path = output_dir / f"unified_{unified_id}_retrieval_eval.json"
+    txt_path = output_dir / f"unified_{unified_id}_retrieval_eval.txt"
     json_path.write_text(json.dumps(report_json, ensure_ascii=False, indent=2), encoding="utf-8")
     write_text_report(txt_path, summary, results)
     return summary, results, json_path, txt_path

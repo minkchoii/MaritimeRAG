@@ -30,6 +30,12 @@ def infer_source(pdf_path: Path) -> str:
         return "DNV"
     if "kr" in path_lower:
         return "KR"
+    if "lr rules" in path_lower:
+        return "LR"
+    if re.search(r"[/\\]mepc[/\\]", path_lower):
+        return "MEPC"
+    if re.search(r"[/\\]msc[/\\]", path_lower) or re.search(r"[/\\]imo[/\\]msc[/\\]", path_lower):
+        return "MSC"
     return "UNKNOWN"
 
 
@@ -69,6 +75,7 @@ def infer_priority(file_name: str) -> int:
 # 파일럿·eval과 호환되는 고정 ID (상대 경로 기준, 소문자)
 CANONICAL_DOC_ID_ALIASES: dict[str, str] = {
     "kr rules/1편_2025.pdf": "kr_1_2025",
+    "lr rules/notice no.1 rules and regulations for the classification of ships, july 2025.pdf": "lr_notice_no_1_2025",
 }
 
 

@@ -2,8 +2,24 @@ from __future__ import annotations
 
 import argparse
 from pathlib import Path
+
 import fitz
+from PIL import Image
 from tqdm import tqdm
+
+
+def png_is_valid(path: Path, min_bytes: int = 100) -> bool:
+    """False for missing, empty, or unreadable PNG (e.g. interrupted write)."""
+    if not path.exists():
+        return False
+    if path.stat().st_size < min_bytes:
+        return False
+    try:
+        with Image.open(path) as im:
+            im.verify()
+        return True
+    except Exception:
+        return False
 
 
 def validate_page_range(start_page: int, end_page: int | None, total_pages: int) -> tuple[int, int]:
@@ -51,7 +67,7 @@ def main() -> None:
 
         for page_num in tqdm(page_numbers, total=(end_page - start_page + 1), desc="PDF -> PNG"):
             out_path = doc_out_dir / f"page_{page_num:04d}.png"
-            if out_path.exists() and not args.overwrite:
+            if not args.overwrite and png_is_valid(out_path):
                 continue
 
             page = doc.load_page(page_num - 1)

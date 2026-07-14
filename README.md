@@ -28,11 +28,11 @@ Windows 환경에서는 `pdf2image` 사용을 위해 Poppler 설치가 필요할
 2. 아래 링크를 본인 OneDrive 공유 URL로 바꿉니다.
 3. 클론 후 링크에서 받아 `data/raw_pdfs/`에 풀고 파이프라인을 실행합니다.
 
-| 자료 | OneDrive 링크 (본인 URL로 교체) |
+| 자료 | OneDrive 링크 |
 |------|--------------------------------|
 | 원본 PDF 전체 (`raw_pdfs`) | `https://onedrive.live.com/...` |
-| (선택) 전처리 결과 (`processed`) | `https://onedrive.live.com/...` |
-| (선택) 레이아웃 모델 `.pt` | `https://onedrive.live.com/...` |
+| 전처리 결과 (`processed`) | `https://onedrive.live.com/...` |
+| 레이아웃 모델 `.pt` | `https://onedrive.live.com/...` |
 
 > **주의:** 규칙 PDF는 저작권이 있습니다. **공개(public) GitHub·공개 OneDrive 링크**에 올리지 마세요.  
 > 사내/팀 **제한 공유** 링크만 사용하세요.
@@ -50,7 +50,7 @@ Windows 환경에서는 `pdf2image` 사용을 위해 Poppler 설치가 필요할
   - `data/raw_pdfs/KR Rules`
   - `data/raw_pdfs/ABS rules`
   - `data/raw_pdfs/dnv-class_2026-04`
-  - `data/raw_pdfs/MSC`
+  - `data/raw_pdfs/LR Rules`
 - 레이아웃 모델 가중치:
   - `models/layout/yolov10m_doclaynet.pt`
 
@@ -63,6 +63,25 @@ Windows 환경에서는 `pdf2image` 사용을 위해 Poppler 설치가 필요할
 ```bash
 python scripts/00_build_manifest.py --input-dir data/raw_pdfs --output data/manifests/pdf_manifest.csv
 ```
+
+### 1-0) 100 PDF 파일럿 (4종 층화 샘플 → 통합 벡터 DB)
+
+```bash
+# 1) manifest + 100개 doc_id 목록 생성
+python scripts/run_pilot_100.py --phase sample
+
+# 2) 전처리 (시험: 5개만)
+python scripts/run_pilot_100.py --phase preprocess --max-docs 5
+
+# 3) 통합 Chroma 인덱스 (text/table/figure 유형별 임베딩 텍스트)
+python scripts/run_pilot_100.py --phase index
+
+# 4) 통합 검색 (source 필터)
+python scripts/rag_query.py --unified pilot_100 --source KR -i --full-text --top-k 3
+python scripts/rag_query.py --unified pilot_100 --query "DNV classification requirements" --source DNV
+```
+
+산출물: `data/manifests/pilot_100_docs.csv`, `data/processed/index/unified_pilot_100/`
 
 ### 1-1) 문서별 RAG 배치 (전처리 + 인덱스 + eval)
 

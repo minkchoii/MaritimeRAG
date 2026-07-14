@@ -10,6 +10,7 @@ Steps: pdf, layout, merge, crop, chunks, quality, index, eval
 from __future__ import annotations
 
 import argparse
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -17,6 +18,16 @@ from pathlib import Path
 import pandas as pd
 
 ALL_STEPS = ("pdf", "layout", "merge", "crop", "chunks", "quality", "index", "eval")
+SKIP_MARKER = "index_skipped.json"
+
+
+def mark_index_skipped(project_root: Path, doc_id: str, reason: str) -> None:
+    skip_dir = project_root / "data/processed/index" / doc_id
+    skip_dir.mkdir(parents=True, exist_ok=True)
+    (skip_dir / SKIP_MARKER).write_text(
+        json.dumps({"reason": reason}, ensure_ascii=False),
+        encoding="utf-8",
+    )
 
 
 def run_step(cmd: list[str], cwd: Path) -> None:
@@ -189,6 +200,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Batch-run RAG pipeline for manifest documents.")
     parser.add_argument("--python", type=str, default=sys.executable)
     parser.add_argument("--manifest", type=Path, default=Path("data/manifests/pdf_manifest.csv"))
+    parser.add_argument(
+        "--doc-list",
+        type=Path,
+        default=None,
+        help="CSV with doc_id column (e.g. data/manifests/pilot_100_docs.csv)",
+    )
     parser.add_argument("--doc-id", action="append", dest="doc_ids", help="Repeatable doc_id filter")
     parser.add_argument("--source", type=str, default=None, help="Filter by source (KR, DNV, ABS)")
     parser.add_argument(
@@ -212,7 +229,15 @@ def main() -> None:
         default=Path("data/eval/kr_1_2025_questions.jsonl"),
     )
     parser.add_argument("--top-k", type=int, default=5)
+    parser.add_argument(
+        "--skip-on-error",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Continue batch on per-document failure (default: on when --doc-list is set)",
+    )
     args = parser.parse_args()
+    if args.skip_on_error is None:
+        args.skip_on_error = args.doc_list is not None
 
     project_root = Path.cwd()
     if args.steps.strip().lower() == "all":
@@ -223,23 +248,56 @@ def main() -> None:
         if unknown:
             raise ValueError(f"Unknown steps: {unknown}. Valid: {ALL_STEPS}")
 
-    rows = load_manifest_rows(args.manifest, args.doc_ids, args.source)
-    print(f"Processing {len(rows)} document(s): {[r['doc_id'] for r in rows]}")
+    if args.doc_list:
+        if not args.doc_list.exists():
+            raise FileNotFoundError(f"Doc list not found: {args.doc_list}")
+        list_df = pd.read_csv(args.doc_list)
+        list_ids = list_df["doc_id"].astype(str).tolist()
+        full_df = pd.read_csv(args.manifest)
+        rows = full_df[full_df["doc_id"].isin(list_ids)].to_dict(orient="records")
+        if not rows:
+            raise ValueError(f"No manifest rows for doc_ids in {args.doc_list}")
+        order = {d: i for i, d in enumerate(list_ids)}
+        rows.sort(key=lambda r: order.get(str(r["doc_id"]), 9999))
+    else:
+        rows = load_manifest_rows(args.manifest, args.doc_ids, args.source)
 
+    print(f"Processing {len(rows)} document(s)")
+    if len(rows) <= 10:
+        print([r["doc_id"] for r in rows])
+
+    failed: list[str] = []
     for row in rows:
-        process_document(
-            row,
-            project_root=project_root,
-            python=args.python,
-            steps=steps,
-            dpi=args.dpi,
-            overwrite_images=args.overwrite_images,
-            layout_conf=args.layout_conf,
-            layout_model=args.layout_model,
-            run_eval=args.run_eval,
-            eval_questions=args.eval_questions,
-            top_k=args.top_k,
-        )
+        doc_id = str(row["doc_id"])
+        try:
+            process_document(
+                row,
+                project_root=project_root,
+                python=args.python,
+                steps=steps,
+                dpi=args.dpi,
+                overwrite_images=args.overwrite_images,
+                layout_conf=args.layout_conf,
+                layout_model=args.layout_model,
+                run_eval=args.run_eval,
+                eval_questions=args.eval_questions,
+                top_k=args.top_k,
+            )
+        except Exception as exc:
+            if not args.skip_on_error:
+                raise
+            reason = str(exc)
+            print(f"\n[SKIP] {doc_id}: {reason}\n", flush=True)
+            mark_index_skipped(project_root, doc_id, reason)
+            failed.append(doc_id)
+
+    if failed:
+        fail_log = project_root / "data/processed/logs/batch_skipped_docs.jsonl"
+        fail_log.parent.mkdir(parents=True, exist_ok=True)
+        with fail_log.open("a", encoding="utf-8") as f:
+            for doc_id in failed:
+                f.write(json.dumps({"doc_id": doc_id}, ensure_ascii=False) + "\n")
+        print(f"\nSkipped {len(failed)} document(s). See {fail_log}")
 
     print("\nBatch pipeline completed.")
 
