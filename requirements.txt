@@ -6,3 +6,4 @@ tqdm>=4.66.0
 chromadb>=0.5.0
 sentence-transformers>=3.0.0
 rank_bm25>=0.2.2
+streamlit>=1.40.0
