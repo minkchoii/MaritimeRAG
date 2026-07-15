@@ -16,7 +16,15 @@ from embedding_policy import (
     ALLOWED_EMBEDDING_PRESETS,
     REQUIRED_LANGUAGES,
     embed_texts_local,
+    get_embedding_tokenizer,
     resolve_embedding_config,
+)
+from embedding_chunk_policy import (
+    CHUNK_POLICY_VERSION,
+    DEFAULT_EMBEDDING_OVERLAP_TOKENS,
+    DEFAULT_MAX_EMBEDDING_TOKENS,
+    EMBEDDING_POLICY_VERSION,
+    prepare_chunks_for_embedding,
 )
 from index_build_lib import (
     MIN_INDEX_TEXT_CHARS,
@@ -69,6 +77,14 @@ def main() -> None:
         help="Index all chunks including suspicious ones",
     )
     parser.add_argument("--min-chars", type=int, default=MIN_INDEX_TEXT_CHARS)
+    parser.add_argument(
+        "--structured-tables",
+        choices=("include", "exclude", "only"),
+        default="include",
+        help="Include, exclude, or exclusively index structured table chunks",
+    )
+    parser.add_argument("--max-embedding-tokens", type=int, default=DEFAULT_MAX_EMBEDDING_TOKENS)
+    parser.add_argument("--embedding-overlap-tokens", type=int, default=DEFAULT_EMBEDDING_OVERLAP_TOKENS)
     args = parser.parse_args()
 
     embed_config = resolve_embedding_config(args.embedding_preset, args.model)
@@ -100,7 +116,13 @@ def main() -> None:
         ]
         all_chunks.extend(table_chunks)
 
-    index_chunks = filter_chunks_for_index(all_chunks, include_types, skip_ids, args.min_chars)
+    index_chunks = filter_chunks_for_index(
+        all_chunks,
+        include_types,
+        skip_ids,
+        args.min_chars,
+        structured_table_mode=args.structured_tables,
+    )
 
     if not index_chunks:
         raise ValueError("No chunks selected for indexing. Check filters and chunks.jsonl.")
@@ -118,13 +140,22 @@ def main() -> None:
             file_name = str(meta_row.get("file_name", ""))
             folder = folder_from_path(str(meta_row.get("file_path", "")))
 
-    texts: list[str] = []
+    model_name = str(embed_config["model"])
+    tokenizer = get_embedding_tokenizer(model_name)
+    render_embedding = lambda chunk: embedding_text_and_mode(
+        chunk, source=source, file_name=file_name, folder=folder
+    )
+    index_chunks, texts, modes, split_stats = prepare_chunks_for_embedding(
+        index_chunks,
+        tokenizer=tokenizer,
+        model_name=model_name,
+        render_embedding=render_embedding,
+        max_tokens=args.max_embedding_tokens,
+        overlap_tokens=args.embedding_overlap_tokens,
+    )
+
     metadatas: list[dict] = []
-    for chunk in index_chunks:
-        text, mode = embedding_text_and_mode(
-            chunk, source=source, file_name=file_name, folder=folder
-        )
-        texts.append(text)
+    for chunk, mode in zip(index_chunks, modes):
         metadatas.append(
             chunk_metadata(
                 chunk,
@@ -134,8 +165,6 @@ def main() -> None:
                 embedding_mode=mode,
             )
         )
-    model_name = str(embed_config["model"])
-
     print(f"Embedding preset: {args.embedding_preset}")
     note = str(embed_config.get("note", "")).encode("ascii", "replace").decode("ascii")
     print(f"Model: {model_name} ({note})")
@@ -160,10 +189,16 @@ def main() -> None:
         "doc_id": args.doc_id,
         "embedding_preset": args.embedding_preset,
         "embedding_model": model_name,
+        "embedding_model_revision": embed_config.get("revision"),
         "embedding_provider": embed_config["provider"],
         "embedding_deployment": "local",
         "languages": list(embed_config.get("languages", REQUIRED_LANGUAGES)),
         "embedding_policy": "local_multilingual_ko_en_no_chinese",
+        "embedding_policy_version": EMBEDDING_POLICY_VERSION,
+        "chunk_policy_version": CHUNK_POLICY_VERSION,
+        "max_embedding_tokens": args.max_embedding_tokens,
+        "embedding_overlap_tokens": args.embedding_overlap_tokens,
+        "embedding_split_stats": split_stats.as_dict(),
         "collection_name": collection_name,
         "chroma_path": chroma_dir.resolve().as_posix(),
         "chunks_source": chunks_path.resolve().as_posix(),
@@ -171,6 +206,7 @@ def main() -> None:
         "indexed_chunks": len(index_chunks),
         "skipped_suspicious": len(skip_ids),
         "include_types": sorted(include_types),
+        "structured_table_mode": args.structured_tables,
         "indexed_by_type": type_counts,
         "indexed_by_chunk_type": chunk_type_counts,
         "table_chunks_indexed": len(table_chunks) if has_structured_tables else 0,

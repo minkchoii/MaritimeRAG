@@ -1,4 +1,4 @@
-"""Rebuild unified full_corpus from rag_corpus_457.csv (408 + 48 KR, excludes integrated compilation)."""
+"""Rebuild the policy-v1 body/caption corpus from rag_corpus_457.csv."""
 from __future__ import annotations
 
 import subprocess
@@ -16,9 +16,17 @@ if __name__ == "__main__":
             sys.executable,
             "scripts/10_build_unified_index.py",
             "--collection-id",
-            "full_corpus",
+            "full_corpus_v1",
             "--doc-list",
             str(RAG_CORPUS),
+            "--include-types",
+            "text,picture",
+            "--structured-tables",
+            "exclude",
+            "--max-embedding-tokens",
+            "420",
+            "--embedding-overlap-tokens",
+            "60",
         ],
         cwd=str(ROOT),
         check=True,

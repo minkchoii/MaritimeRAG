@@ -122,7 +122,7 @@ def evaluate_row(retrieved: list[RetrievedChunk], row: dict, k: int) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Meeting outcome retrieval benchmark.")
     parser.add_argument("--questions", type=Path, default=Path("data/eval/meeting_questions.jsonl"))
-    parser.add_argument("--collection-id", type=str, default="full_corpus")
+    parser.add_argument("--collection-id", type=str, default="full_corpus_v1")
     parser.add_argument("--index-dir", type=Path, default=Path("data/processed/index"))
     parser.add_argument("--chunks-dir", type=Path, default=Path("data/processed/chunks"))
     parser.add_argument("--top-k", type=int, default=10)

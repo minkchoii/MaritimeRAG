@@ -1499,7 +1499,7 @@ def main() -> None:
             }[x],
             help="Fast: top_k=3, fetch_k=10, streaming. Accurate: 기존 파일럿 설정.",
         )
-        st.selectbox("Corpus", ["full_corpus"], index=0)
+        st.selectbox("Corpus", [DEFAULT_UNIFIED], index=0)
         llm_model = st.text_input("Ollama 모델", value=DEFAULT_OLLAMA_MODEL)
         ollama_base = st.text_input("Ollama URL", value=DEFAULT_OLLAMA_BASE)
         if latency_mode == "accurate":
@@ -1575,7 +1575,7 @@ def main() -> None:
         st.divider()
         st.markdown(
             "**사용 순서**\n"
-            "1. **일반 QA** — IMO full_corpus에 질문 입력\n"
+            f"1. **일반 QA** — IMO {DEFAULT_UNIFIED}에 질문 입력\n"
             "2. **표 QA** — KR 표 상위 22건 코퍼스에 질문 입력\n"
             "3. Latency breakdown에서 run_id 확인\n\n"
             "로그: `retrieval_timing_trace.jsonl`"

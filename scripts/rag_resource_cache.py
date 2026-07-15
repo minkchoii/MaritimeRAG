@@ -113,7 +113,7 @@ def load_unified_collection(
 
 
 def warm_all_resources(
-    unified_id: str = "full_corpus",
+    unified_id: str = "full_corpus_v1",
     index_dir: Path | None = None,
 ) -> tuple[Any, str, dict]:
     """Eager-load vector DB + embedding model (benchmark warm-start)."""

@@ -159,7 +159,7 @@ def run_retrieval_benchmark(row: dict, collection, model_name: str, chunks_dir: 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fast mode quality + latency benchmark.")
     parser.add_argument("--questions", type=Path, default=Path("data/eval/fast_questions.jsonl"))
-    parser.add_argument("--collection-id", type=str, default="full_corpus")
+    parser.add_argument("--collection-id", type=str, default="full_corpus_v1")
     parser.add_argument("--index-dir", type=Path, default=Path("data/processed/index"))
     parser.add_argument("--chunks-dir", type=Path, default=Path("data/processed/chunks"))
     parser.add_argument("--embedding-preset", type=str, default=DEFAULT_EMBEDDING_PRESET)

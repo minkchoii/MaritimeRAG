@@ -85,7 +85,7 @@ def retrieve_with_mode(
 def main() -> None:
     parser = argparse.ArgumentParser(description="Table schema retrieval benchmark.")
     parser.add_argument("--questions", type=Path, default=Path("data/eval/table_schema_regression.jsonl"))
-    parser.add_argument("--collection-id", type=str, default="kr_tables")
+    parser.add_argument("--collection-id", type=str, default="kr_tables_v1")
     parser.add_argument("--index-dir", type=Path, default=Path("data/processed/index"))
     parser.add_argument("--chunks-dir", type=Path, default=Path("data/processed/chunks"))
     parser.add_argument("--top-k", type=int, default=10)

@@ -64,7 +64,7 @@ def evaluate_answer(row: dict, answer: str) -> dict:
 def main() -> None:
     parser = argparse.ArgumentParser(description="Fast scope/terminology validation.")
     parser.add_argument("--questions", type=Path, default=Path("data/eval/fast_scope_tests.jsonl"))
-    parser.add_argument("--collection-id", type=str, default="full_corpus")
+    parser.add_argument("--collection-id", type=str, default="full_corpus_v1")
     parser.add_argument("--index-dir", type=Path, default=DEFAULT_INDEX_DIR)
     parser.add_argument("--chunks-dir", type=Path, default=Path("data/processed/chunks"))
     parser.add_argument("--llm-model", type=str, default=DEFAULT_OLLAMA_MODEL)

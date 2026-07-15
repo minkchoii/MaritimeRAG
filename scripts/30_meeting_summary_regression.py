@@ -139,7 +139,7 @@ def main() -> None:
     parser.add_argument("--out", type=Path, default=Path("data/processed/logs/meeting_summary_regression.json"))
     args = parser.parse_args()
 
-    collection, embed, _ = load_unified_collection("full_corpus", args.index_dir)
+    collection, embed, _ = load_unified_collection("full_corpus_v1", args.index_dir)
     results = [run_test(t, collection, embed, args.chunks_dir) for t in TESTS]
     passed = sum(1 for r in results if r["passed"])
     summary = {"passed": passed, "total": len(results), "results": results}

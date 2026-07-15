@@ -296,7 +296,7 @@ def main() -> int:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     parser = argparse.ArgumentParser(description="RAG worker for Streamlit subprocess calls.")
-    parser.add_argument("--unified", default="full_corpus")
+    parser.add_argument("--unified", default="full_corpus_v1")
     parser.add_argument("--index-dir", default=str(_ROOT / "data/processed/index"))
     parser.add_argument("--chunks-dir", default=str(_ROOT / "data/processed/chunks"))
     sub = parser.add_subparsers(dest="cmd", required=True)

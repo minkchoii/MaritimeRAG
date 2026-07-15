@@ -286,7 +286,7 @@ def main() -> None:
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
 
     parser = argparse.ArgumentParser(description="Pilot RAG validation (retrieval + diversity rerank).")
-    parser.add_argument("--unified", type=str, default="full_corpus")
+    parser.add_argument("--unified", type=str, default="full_corpus_v1")
     parser.add_argument("--questions", type=Path, default=Path("data/eval/pilot_validation_questions.jsonl"))
     parser.add_argument("--top-k", type=int, default=8)
     parser.add_argument("--eval-k", type=int, default=5)

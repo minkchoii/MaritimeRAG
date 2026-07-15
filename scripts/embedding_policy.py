@@ -53,6 +53,7 @@ ALLOWED_EMBEDDING_PRESETS: dict[str, dict[str, str | list[str]]] = {
     "e5-base": {
         "provider": LOCAL_PROVIDER,
         "model": "intfloat/multilingual-e5-base",
+        "revision": "d128750597153bb5987e10b1c3493a34e5a4502a",
         "deployment": "local",
         "languages": ["ko", "en"],
         "note": "Microsoft E5 multilingual — 로컬 실행, 한·영 권장 기본",
@@ -191,8 +192,29 @@ def get_sentence_transformer(model_name: str):
         os.environ.setdefault("TOKENIZERS_PARALLELISM", "false")
         from sentence_transformers import SentenceTransformer
 
-        _ENCODER_CACHE[model_name] = SentenceTransformer(model_name)
+        revision = next(
+            (
+                str(config.get("revision"))
+                for config in ALLOWED_EMBEDDING_PRESETS.values()
+                if str(config.get("model")) == model_name and config.get("revision")
+            ),
+            None,
+        )
+        kwargs = {"revision": revision} if revision else {}
+        _ENCODER_CACHE[model_name] = SentenceTransformer(model_name, **kwargs)
     return _ENCODER_CACHE[model_name]
+
+
+def get_embedding_tokenizer(model_name: str):
+    """Return the exact tokenizer used by the cached sentence-transformer."""
+    encoder = get_sentence_transformer(model_name)
+    tokenizer = getattr(encoder, "tokenizer", None)
+    if tokenizer is None:
+        first_module = encoder._first_module()  # sentence-transformers compatibility
+        tokenizer = getattr(first_module, "tokenizer", None)
+    if tokenizer is None:
+        raise RuntimeError(f"Embedding tokenizer is unavailable: {model_name}")
+    return tokenizer
 
 
 def warm_embed_model(model_name: str) -> None:

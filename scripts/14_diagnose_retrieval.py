@@ -21,7 +21,7 @@ from retrieval_search import enrich_query_for_embedding, query_with_hybrid_ranki
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Diagnose retrieval for eval questions.")
-    parser.add_argument("--unified", default="full_corpus")
+    parser.add_argument("--unified", default="full_corpus_v1")
     parser.add_argument("--questions", type=Path, default=Path("data/eval/pilot_validation_questions.jsonl"))
     parser.add_argument("--top-k", type=int, default=8)
     parser.add_argument("--index-dir", type=Path, default=Path("data/processed/index"))

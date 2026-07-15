@@ -83,13 +83,10 @@ def text_for_embedding_text_chunk(chunk: dict) -> str:
 def embedding_text_for_table_chunk(chunk: dict, *, source: str = "", file_name: str = "") -> tuple[str, str]:
     """Embedding text for structured table chunks (summary / markdown / row)."""
     chunk_type = str(chunk.get("chunk_type", "")).lower()
-    doc_id = str(chunk.get("doc_id", ""))
-    page = chunk.get("page_number", chunk.get("page", 0))
-    table_id = str(chunk.get("table_id", ""))
     caption = str(chunk.get("caption") or "")
     section = str(chunk.get("section_title") or "")
     src_part = f"source={source}" if source else "source=unknown"
-    header = f"[{chunk_type}] {src_part} doc={doc_id} page={page} table={table_id}"
+    header = f"[{chunk_type}] {src_part}"
     if file_name:
         header += f" file={file_name}"
     if caption:
@@ -125,7 +122,7 @@ def embedding_text_and_mode(
     if element_type == "table":
         body = str(chunk.get("text", "")).strip()
         first_line = body.split("\n", 1)[0].strip()[:160]
-        header = f"[table] {src_part} doc={doc_id} page={page}"
+        header = f"[table] {src_part}"
         if file_name:
             header += f" file={file_name}"
         if first_line:
@@ -134,7 +131,7 @@ def embedding_text_and_mode(
 
     if element_type in ("picture", "figure"):
         body = str(chunk.get("text", "")).strip()
-        header = f"[figure] {src_part} doc={doc_id} page={page}"
+        header = f"[figure] {src_part}"
         if file_name:
             header += f" file={file_name}"
         mode = "figure_caption" if body and not is_placeholder_picture(body) else "figure_placeholder"
@@ -144,6 +141,12 @@ def embedding_text_and_mode(
 
     body = text_for_embedding_text_chunk(chunk)
     header = _passage_header(source=source, file_name=file_name, folder=folder)
+    section = str(chunk.get("section_title") or "").strip()
+    clause = str(chunk.get("article_number") or chunk.get("clause_number") or "").strip()
+    if section:
+        header = f"{header}\nsection: {section}" if header else f"section: {section}"
+    if clause:
+        header = f"{header}\nclause: {clause}" if header else f"clause: {clause}"
     if header:
         return f"{header}\n{body}", "text_native"
     return body, "text_native"
@@ -215,12 +218,20 @@ def filter_chunks_for_index(
     include_types: frozenset[str],
     skip_ids: set[str],
     min_chars: int,
+    structured_table_mode: str = "include",
 ) -> list[dict]:
-    return [
-        chunk
-        for chunk in chunks
-        if should_index_chunk(chunk, include_types, skip_ids, min_chars)
-    ]
+    if structured_table_mode not in {"include", "exclude", "only"}:
+        raise ValueError(f"Unknown structured_table_mode: {structured_table_mode}")
+    selected: list[dict] = []
+    for chunk in chunks:
+        is_structured_table = str(chunk.get("chunk_type", "")).lower() in TABLE_CHUNK_TYPES
+        if structured_table_mode == "exclude" and is_structured_table:
+            continue
+        if structured_table_mode == "only" and not is_structured_table:
+            continue
+        if should_index_chunk(chunk, include_types, skip_ids, min_chars):
+            selected.append(chunk)
+    return selected
 
 
 def folder_from_path(file_path: str) -> str:
@@ -271,6 +282,14 @@ def chunk_metadata(
             meta["row_index"] = int(row_index)
         if column_names:
             meta["column_names"] = ",".join(str(c) for c in column_names[:12])
+    if chunk.get("split_from"):
+        meta["split_from"] = str(chunk.get("split_from"))
+        meta["embedding_split_index"] = int(chunk.get("embedding_split_index", 0))
+        meta["embedding_split_count"] = int(chunk.get("embedding_split_count", 0))
+    if chunk.get("embedding_token_count") is not None:
+        meta["embedding_token_count"] = int(chunk.get("embedding_token_count", 0))
+    if chunk.get("chunk_policy_version"):
+        meta["chunk_policy_version"] = str(chunk.get("chunk_policy_version"))
     return meta
 
 

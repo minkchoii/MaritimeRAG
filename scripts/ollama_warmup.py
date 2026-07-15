@@ -418,7 +418,7 @@ def ensure_fast_warm(
 def bootstrap_all_resources(
     model: str,
     ollama_base: str,
-    unified_id: str = "full_corpus",
+    unified_id: str = "full_corpus_v1",
     index_dir: Path | None = None,
     *,
     force_llm_warm: bool = True,

@@ -15,7 +15,7 @@ CHUNKS_DIR = ROOT / "data/processed/chunks"
 RAG_CORPUS = ROOT / "data/manifests/rag_corpus_457.csv"
 OUT_MANIFEST = ROOT / "data/manifests/kr_table_top22.csv"
 MIN_LAYOUT_TABLES = 50
-COLLECTION_ID = "kr_tables"
+COLLECTION_ID = "kr_tables_v1"
 
 
 def doc_ids_top_kr(*, min_tables: int = MIN_LAYOUT_TABLES) -> list[str]:
@@ -78,6 +78,14 @@ def build_index(manifest_path: Path) -> None:
             str(manifest_path),
             "--manifest",
             str(RAG_CORPUS),
+            "--include-types",
+            "table",
+            "--structured-tables",
+            "only",
+            "--max-embedding-tokens",
+            "420",
+            "--embedding-overlap-tokens",
+            "60",
         ],
         cwd=str(ROOT),
         check=True,

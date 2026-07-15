@@ -30,8 +30,8 @@ from accurate_streaming import mark_accurate_initial_ack, wrap_accurate_on_token
 from retrieval_timing import TimingTrace, populate_timing_meta, set_run_context
 from retrieval_verification import append_retrieval_trace_log, serialize_chunk_list
 
-DEFAULT_UNIFIED = "full_corpus"
-TABLE_QA_UNIFIED = "kr_tables"
+DEFAULT_UNIFIED = "full_corpus_v1"
+TABLE_QA_UNIFIED = "kr_tables_v1"
 TABLE_QA_ACCURATE = {
     "top_k": 10,
     "fetch_k": 30,

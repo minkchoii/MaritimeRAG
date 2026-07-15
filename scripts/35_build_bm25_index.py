@@ -20,7 +20,7 @@ from rag_resource_cache import unified_index_fingerprint
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Build persisted BM25 index for unified corpus.")
-    parser.add_argument("--unified", type=str, default="full_corpus")
+    parser.add_argument("--unified", type=str, default="full_corpus_v1")
     parser.add_argument("--index-dir", type=Path, default=Path("data/processed/index"))
     parser.add_argument("--rebuild", action="store_true")
     parser.add_argument("--batch-size", type=int, default=CHROMA_GET_BATCH_SIZE)
